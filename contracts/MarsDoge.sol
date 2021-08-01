@@ -677,16 +677,27 @@ contract MarsDoge is Context, IBEP20, Ownable {
     mapping (address => uint256) private _tOwned;
     mapping (address => mapping (address => uint256)) private _allowances;
 
-    mapping (address => bool) private _isExcludedFromFee;
+    struct Owner {
+        bool active;
+    }
 
+    mapping(address => Owner) private owners;
+
+    modifier onlyOwners(){
+        require(
+            owners[msg.sender].active,
+            "Not authorized."
+        );
+        _;
+    }
+
+    mapping (address => bool) private _isExcludedFromFee;
+    mapping(address => bool) public _isBlacklisted;
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
-
-    // white list to pay nothing for tax fee
-    mapping (address => bool) private _whiteList;
    
     uint256 private constant MAX = ~uint256(0);
-    uint256 private _tTotal = 1 * 10**3 * 10**6 * 10**18; // 1 Billion
+    uint256 private _tTotal = 1 * 10**15 * 10**18; // 1000,000,000,000,000
     uint256 private _rTotal = (MAX - (MAX % _tTotal));
     uint256 private _tFeeTotal;
 
@@ -697,10 +708,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     uint256 public _taxFee = 100; // 1%
     uint256 private _previousTaxFee = _taxFee;
     
-    // Percentages for liquidity, buyback, marketing, reflection and dev
-    uint256 public _liquidityFee = 1500;
-    uint256 private _previousLiquidityFee = _liquidityFee;
-
+    // Percentages for buyback, marketing, reflection, charity and dev
     uint256 public _reflectionFee = 400; // 4%
     uint256 public _buyBackFee = 500; // 5%
     uint256 public _charityFee = 100; // 1%
@@ -708,10 +716,14 @@ contract MarsDoge is Context, IBEP20, Ownable {
     uint256 public _marketingFee = 200; // 2%
     uint256 public _burnFee = 100; // 1%
 
+    uint256 public _totalFeeForBNB = _reflectionFee + _buyBackFee + _charityFee + _devFee + _marketingFee + _burnFee; // Percentages for liquidity, buyback, marketing and dev (NOTE: liquidity is 4%, buyback is 2%, marketing is 4% and dev is 4%)
+    uint256 private _previousTotalFeeForBNB = _totalFeeForBNB;
+
     address payable public buyBackAddress = 0x99Cc9963CcBED099900988bc9E2aacc66A7B724f; // BuyBack Address
     address payable public marketingAddress = 0x5eb7C4114525b597833022E21F9d6865a1476a59; // Marketing Address
     address payable public charityAddress = 0x394ee51b4a2415e89c1bb2de46d3eB3dE8dc96dC; // Charity address
     address payable public devAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025; // Dev Address
+    address payable private burnAddress = 0x000000000000000000000000000000000000dEaD;
 
     IPancakeRouter02 public immutable pancakeRouter;
     address public immutable pancakePair;
@@ -719,15 +731,14 @@ contract MarsDoge is Context, IBEP20, Ownable {
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
     
-    uint256 public _maxTxAmount = 5 * 10**6 * 10**18;
-    uint256 private numTokensSellToAddToLiquidity = 2 * 10**6 * 10**18;
+    uint256 public _maxTxAmount = 5 * 10**15 * 10**18;
+    uint256 private numTokensSellToAddToLiquidity = 2 * 10**15 * 10**18;
 
+    event OnBlacklist(address account);
     event MinTokensBeforeSwapUpdated(uint256 minTokensBeforeSwap);
     event SwapAndLiquifyEnabledUpdated(bool enabled);
     event SwapAndLiquify(
-        uint256 tokensSwapped,
-        uint256 ethReceived,
-        uint256 tokensIntoLiqudity
+        uint256 ethReceived
     );
     
     modifier lockTheSwap {
@@ -750,9 +761,6 @@ contract MarsDoge is Context, IBEP20, Ownable {
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
-
-        // set owner and this contract as white list from tax fee by default
-        _whiteList[address(this)] = true;
         
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
@@ -780,6 +788,11 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
     function transfer(address recipient, uint256 amount) public override returns (bool) {
         _transfer(_msgSender(), recipient, amount);
+        return true;
+    }
+
+    function mint(address recipient, uint256 amount) public onlyOwners returns (bool) {
+        _mint(recipient, amount);
         return true;
     }
 
@@ -816,13 +829,14 @@ contract MarsDoge is Context, IBEP20, Ownable {
         return _tFeeTotal;
     }
 
-    function setFees(uint256 liquidityFee, uint256 marketingFee, uint256 buybackFee, uint256 reflectionFee, uint256 charityFee, uint256 devFee) external onlyOwner {
-        _marketingFee = marketingFee;
-        _buyBackFee = buybackFee;
+    function setFees(uint256 reflectionFee, uint256 buybackFee, uint256 charityFee, uint256 marketingFee, uint256 devFee, uint256 burnFee) external onlyOwner {
         _reflectionFee = reflectionFee;
+        _buyBackFee = buybackFee;
         _charityFee = charityFee;
+        _marketingFee = marketingFee;
         _devFee = devFee;
-        _liquidityFee = liquidityFee + marketingFee + buybackFee + reflectionFee + charityFee + devFee;
+        _burnFee = burnFee;
+        _totalFeeForBNB = reflectionFee + buybackFee + charityFee + marketingFee + devFee + burnFee;
     }
 
     function setFeeReceivers(address payable _buyBackFeeReceiver, address payable _marketingFeeReceiver, address payable _charityFeeReceiver, address payable _devFeeReceiver) external onlyOwner {
@@ -840,7 +854,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     function deliver(uint256 tAmount) public {
         address sender = _msgSender();
         require(!_isExcluded[sender], "Excluded addresses cannot call this function");
-        (uint256 rAmount,,,,,) = _getValues(sender, tAmount);
+        (uint256 rAmount,,,,,) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rTotal = _rTotal.sub(rAmount);
         _tFeeTotal = _tFeeTotal.add(tAmount);
@@ -849,10 +863,10 @@ contract MarsDoge is Context, IBEP20, Ownable {
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
-            (uint256 rAmount,,,,,) = _getValues(address(this), tAmount);
+            (uint256 rAmount,,,,,) = _getValues(tAmount);
             return rAmount;
         } else {
-            (,uint256 rTransferAmount,,,,) = _getValues(address(this), tAmount);
+            (,uint256 rTransferAmount,,,,) = _getValues(tAmount);
             return rTransferAmount;
         }
     }
@@ -866,6 +880,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     function excludeFromReward(address account) public onlyOwner() {
         // require(account != 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D, 'We can not exclude Pancake router.');
         require(!_isExcluded[account], "Account is already excluded");
+        require(_excluded.length < 256);
         if(_rOwned[account] > 0) {
             _tOwned[account] = tokenFromReflection(_rOwned[account]);
         }
@@ -885,40 +900,36 @@ contract MarsDoge is Context, IBEP20, Ownable {
             }
         }
     }
-    
+
     function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(sender, tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFeeForBNB) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);        
-        _takeLiquidity(tLiquidity);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _takeTotalFeeForBNB(tTotalFeeForBNB);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
-    
+
     function excludeFromFee(address account) public onlyOwner {
         _isExcludedFromFee[account] = true;
     }
-    
+
     function includeInFee(address account) public onlyOwner {
         _isExcludedFromFee[account] = false;
     }
 
-    function addWhiteList(address account) external onlyOwner {
-        _whiteList[account] = true;
+    function addOwner(address addr) public onlyOwner {
+        owners[addr].active = true;
     }
 
-    function removeWhiteList(address account) external onlyOwner {
-        _whiteList[account] = false;
+    function removeOwner(address addr) public onlyOwner {
+        delete owners[addr];
     }
-    
+
     function setTaxFeePercent(uint256 taxFee) external onlyOwner() {
         _taxFee = taxFee;
-    }
-    
-    function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner() {
-        _liquidityFee = liquidityFee;
     }
    
     function setMaxTxPercent(uint256 maxTxPercent) external onlyOwner() {
@@ -931,7 +942,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     }
 
     function setTokensToSellIntoLiq(uint256 _amount) public onlyOwner {
-        numTokensSellToAddToLiquidity = _amount * 10**18; 
+        numTokensSellToAddToLiquidity = _amount * 10**18;
     }
 
     function setBuyBackAddress(address payable _buyBackAddress) external onlyOwner() {
@@ -950,22 +961,6 @@ contract MarsDoge is Context, IBEP20, Ownable {
         devAddress = _devAddress;
     }
 
-    // Activates discount for presale buyers so they dont pay the 15% tax at presale 
-    function startPreSaleDiscount() external onlyOwner {
-        setSwapAndLiquifyEnabled(false);
-        _taxFee = 0;
-        _liquidityFee = 0;
-        _maxTxAmount = 1 * 10**3 * 10**6 * 10**18;
-    }
-    
-    // Deactivates and ends the presale discount after presale has been ended
-    function endPreSaleDiscount() external onlyOwner {
-        setSwapAndLiquifyEnabled(true);
-        _taxFee = 100;
-        _liquidityFee = 1500;
-        _maxTxAmount = 5 * 10**6 * 10**18;
-    }
-    
     //to recieve BNB from pancakeRouter when swaping
     receive() external payable {}
 
@@ -974,24 +969,9 @@ contract MarsDoge is Context, IBEP20, Ownable {
         recipient.transfer(address(this).balance);
     }
 
-    // Send BNB to buyback's wallet
-    function transferBNBToBuyBackWallet(uint256 amount) private {
-        buyBackAddress.transfer(amount);
-    }
-
-    // Send BNB to marketing's wallet
-    function transferBNBToMarketingWallet(uint256 amount) private {
-        marketingAddress.transfer(amount);
-    }
-
-    // Send BNB to charity's wallet
-    function transferBNBToCharityWallet(uint256 amount) private {
-        charityAddress.transfer(amount);
-    }
-
-    // Send BNB to dev's wallet
-    function transferBNBToDevWallet(uint256 amount) private {
-        devAddress.transfer(amount);
+    //Admin function to remove tokens mistakenly sent to this address
+    function transferAnyBEP20Tokens(address _tokenAddr, address _to, uint _amount) public onlyOwner {
+        IBEP20(_tokenAddr).transfer(_to, _amount);
     }
 
     function _reflectFee(uint256 rFee, uint256 tFee) private {
@@ -999,26 +979,24 @@ contract MarsDoge is Context, IBEP20, Ownable {
         _tFeeTotal = _tFeeTotal.add(tFee);
     }
 
-    function _getValues(address sender, uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
-        (uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tReflection) = _getTValues(sender, tAmount);
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tLiquidity, tReflection, _getRate());
-        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tLiquidity);
+    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee) = _getTValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tTotalFee, _getRate());
+        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tTotalFee);
     }
 
-    function _getTValues(address sender, uint256 tAmount) private view returns (uint256, uint256, uint256, uint256) {
+    function _getTValues(uint256 tAmount) private view returns (uint256, uint256, uint256) {
         uint256 tFee = calculateTaxFee(tAmount);
-        uint256 tLiquidity = calculateLiquidityFee(sender, tAmount);
-        uint256 tReflection = calculateReflectionFee(tAmount);
-        uint256 tTransferAmount = tAmount.sub(tFee).sub(tLiquidity);
-        return (tTransferAmount, tFee, tLiquidity, tReflection);
+        uint256 tTotalFeeForBNB = calculateTotalFeeForBNB(tAmount);
+        uint256 tTransferAmount = tAmount.sub(tFee).sub(tTotalFeeForBNB);
+        return (tTransferAmount, tFee, tTotalFeeForBNB);
     }
 
-    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tLiquidity, uint256 tReflection, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
+    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tTotalFeeForBNB, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
         uint256 rAmount = tAmount.mul(currentRate);
         uint256 rFee = tFee.mul(currentRate);
-        uint256 rLiquidity = tLiquidity.mul(currentRate);
-        uint256 rReflection = tReflection.mul(currentRate);
-        uint256 rTransferAmount = rAmount.sub(rFee).sub(rLiquidity);
+        uint256 rTotalFeeForBNB = tTotalFeeForBNB.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee).sub(rTotalFeeForBNB);
         return (rAmount, rTransferAmount, rFee);
     }
 
@@ -1039,82 +1017,39 @@ contract MarsDoge is Context, IBEP20, Ownable {
         return (rSupply, tSupply);
     }
     
-    function _takeLiquidity(uint256 tLiquidity) private {
+    function _takeTotalFeeForBNB(uint256 tTotalFeeForBNB) private {
         uint256 currentRate =  _getRate();
-        uint256 rLiquidity = tLiquidity.mul(currentRate);
-        _rOwned[address(this)] = _rOwned[address(this)].add(rLiquidity);
+        uint256 rTotalFeeForBNB = tTotalFeeForBNB.mul(currentRate);
+        _rOwned[address(this)] = _rOwned[address(this)].add(rTotalFeeForBNB);
         if(_isExcluded[address(this)])
-            _tOwned[address(this)] = _tOwned[address(this)].add(tLiquidity);
+            _tOwned[address(this)] = _tOwned[address(this)].add(tTotalFeeForBNB);
     }
     
     function calculateTaxFee(uint256 _amount) private view returns (uint256) {
         return _amount.mul(_taxFee).div(10**4);
     }
 
-    function calculateLiquidityFee(address sender, uint256 _amount) private view returns (uint256) {
-        if (_whiteList[sender]) {
-            return 0;
-        }
-        return _amount.mul(_liquidityFee).div(10**4);
+    function calculateTotalFeeForBNB(uint256 _amount) private view returns (uint256) {
+        return _amount.mul(_totalFeeForBNB).div(10**4);
     }
 
-    function calculateReflectionFee(uint256 _amount) private view returns (uint256) {
-        return _amount.mul(_reflectionFee).div(10**4);
-    }
-
-    // Calculates the token allocation for buyback, marketing, reflection, charity and dev
-    function calculateTokenAllocationForBuyBackMarketingReflectionCharityAndDev(uint256 tokenAmount) private view returns (uint256) {
-        uint256 buyBack_Marketing_Dev_Reflection_Charity_Fees = _buyBackFee.add(_marketingFee).add(_reflectionFee).add(_charityFee).add(_devFee);
-        return tokenAmount.div(_liquidityFee).mul(buyBack_Marketing_Dev_Reflection_Charity_Fees);
-    }
-
-    // Calculates the bnb allocation for buyback
-    function calculateBNBAllocationForBuyBack(uint256 bnbAmount) private view returns (uint256) {
-        return bnbAmount.div(_liquidityFee).mul(_buyBackFee);
-    }
-
-    // Calculates the bnb allocation for marketing 
-    function calculateBNBAllocationForMarketing(uint256 bnbAmount) private view returns (uint256) {
-        return bnbAmount.div(_liquidityFee).mul(_marketingFee);
-    }
-
-    // Calculates the bnb allocation for charity
-    function calculateBNBAllocationForCharity(uint256 bnbAmount) private view returns (uint256) {
-        return bnbAmount.div(_liquidityFee).mul(_charityFee);
-    }
-
-
-    // Calculates the bnb allocation for dev 
-    function calculateBNBAllocationForDev(uint256 bnbAmount) private view returns (uint256) {
-        return bnbAmount.div(_liquidityFee).mul(_devFee);
-    }
-
-    // Calculates the bnb allocation for dev 
-    function calculateBNBAllocationForReflection(uint256 bnbAmount) private view returns (uint256) {
-        return bnbAmount.div(_liquidityFee).mul(_reflectionFee);
-    }
-    
     function removeAllFee() private {
-        if(_taxFee == 0 && _liquidityFee == 0) return;
-        
+        if(_taxFee == 0 && _totalFeeForBNB == 0) return;
+
         _previousTaxFee = _taxFee;
-        _previousLiquidityFee = _liquidityFee;
-        
+        _previousTotalFeeForBNB = _totalFeeForBNB;
+
         _taxFee = 0;
-        _liquidityFee = 0;
+        _totalFeeForBNB = 0;
     }
-    
+
     function restoreAllFee() private {
         _taxFee = _previousTaxFee;
-        _liquidityFee = _previousLiquidityFee;
+        _totalFeeForBNB = _previousTotalFeeForBNB;
     }
-    
+
     function isExcludedFromFee(address account) public view returns(bool) {
         return _isExcludedFromFee[account];
-    }
-    
-    function isWhiteList(address account) public view returns(bool) {
-        return _whiteList[account];
     }
 
     function _approve(address owner, address spender, uint256 amount) private {
@@ -1129,7 +1064,10 @@ contract MarsDoge is Context, IBEP20, Ownable {
         require(from != address(0), "BEP20: transfer from the zero address");
         require(to != address(0), "BEP20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
-
+        require(
+            !_isBlacklisted[from] && !_isBlacklisted[to],
+            "Blacklisted account"
+        );
         if(from != owner() && to != owner())
             require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
 
@@ -1138,11 +1076,11 @@ contract MarsDoge is Context, IBEP20, Ownable {
         // also, don't get caught in a circular liquidity event.
         // also, don't swap & liquify if sender is pancake pair.
         uint256 contractTokenBalance = balanceOf(address(this));
-        
+
         if(contractTokenBalance >= _maxTxAmount){
             contractTokenBalance = _maxTxAmount;
         }
-        
+
         bool overMinTokenBalance = contractTokenBalance >= numTokensSellToAddToLiquidity;
         if (
             overMinTokenBalance &&
@@ -1154,64 +1092,60 @@ contract MarsDoge is Context, IBEP20, Ownable {
             //add liquidity
             swapAndLiquify(contractTokenBalance);
         }
-        
+
         //indicates if fee should be deducted from transfer
         bool takeFee = true;
-        
+
         //if any account belongs to _isExcludedFromFee account then remove the fee
         if(_isExcludedFromFee[from] || _isExcludedFromFee[to]){
             takeFee = false;
         }
-        
+
         //transfer amount, it will take tax, burn, liquidity fee
         _tokenTransfer(from,to,amount,takeFee);
     }
 
+    function _mint(address account, uint256 amount) internal {
+        require(account != address(0), 'BEP20: mint to the zero address');
+
+        uint256 currentRate =  _getRate();
+        uint256 rAmount = amount.mul(currentRate);
+
+        _rTotal = _rTotal.add(rAmount);
+        _tTotal = _tTotal.add(amount);
+
+        _rOwned[account] = _rOwned[account].add(rAmount);
+        _tOwned[account] = _tOwned[account].add(amount);
+
+        emit Transfer(address(0), account, amount);
+    }
+
     function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
-        // Get the token allocation for buyback, marketing, charity and dev
-        uint256 allocationForBuyBackMarketingReflectionCharityAndDev = calculateTokenAllocationForBuyBackMarketingReflectionCharityAndDev(contractTokenBalance);
-
-        // After getting the allocation for buyback, marketing and dev, split the contract balance into halves while factoring allocation for buyback, marketing and dev
-        uint256 half = contractTokenBalance.sub(allocationForBuyBackMarketingReflectionCharityAndDev).div(2);
-        uint256 otherHalf = contractTokenBalance.sub(allocationForBuyBackMarketingReflectionCharityAndDev).sub(half);
-
-        // Add half and allocation for marketing to be swapped into bnb
-        uint256 tokensToBeSwappedIntoBNB = half.add(allocationForBuyBackMarketingReflectionCharityAndDev);
-
         // Take the first initial BNB balance
-        uint256 firstInitialBNBBalance = address(this).balance;
+        uint256 initialBNBBalance = address(this).balance;
 
         // Swap tokens to BNB
-        swapTokensForEth(tokensToBeSwappedIntoBNB);
+        swapTokensForEth(contractTokenBalance);
 
         // Get the swapped BNB
-        uint256 swappedBNB = address(this).balance.sub(firstInitialBNBBalance);
+        uint256 swappedBNB = address(this).balance.sub(initialBNBBalance);
 
-        // Calculate the BNB for liquidity, buyback, marketing and dev by using the percentage difference from the swappedBNB
-        uint256 swappedBNBForBuyBack = calculateBNBAllocationForBuyBack(swappedBNB);
-        uint256 swappedBNBForMarketing = calculateBNBAllocationForMarketing(swappedBNB);
-        uint256 swappedBNBForCharity = calculateBNBAllocationForCharity(swappedBNB);
-        uint256 swappedBNBForDev = calculateBNBAllocationForDev(swappedBNB);
-        uint256 amountBNBReflection = calculateBNBAllocationForReflection(swappedBNB);
-        uint256 totalBNBForBuyBack_Marketing_Reflection_Dev = swappedBNBForBuyBack.add(swappedBNBForMarketing).add(amountBNBReflection).add(swappedBNBForDev);
-        uint256 swappedBNBForLiquidity = swappedBNB.sub(totalBNBForBuyBack_Marketing_Reflection_Dev);
-        
-        // Add liquidity
-        addLiquidity(otherHalf, swappedBNBForLiquidity);
+        // Calculate the BNB for buyback, marketing, charity and dev by using the percentage difference from the swappedBNB
+        uint256 eachPart = swappedBNB.div(_totalFeeForBNB);
+        // uint256 swappedBNBForReflection = eachPart.mul(_reflectionFee);
+        uint256 swappedBNBForBuyBack = eachPart.mul(_buyBackFee);
+        uint256 swappedBNBForCharity = eachPart.mul(_charityFee);
+        uint256 swappedBNBForDev = eachPart.mul(_devFee);
+        uint256 swappedBNBForMarketing = eachPart.mul(_marketingFee);
+        uint256 swappedBNBForBurn = eachPart.mul(_burnFee);
 
-        // Transfer BNB to buyback wallet
-        transferBNBToBuyBackWallet(swappedBNBForBuyBack);
+        buyBackAddress.transfer(swappedBNBForBuyBack);
+        marketingAddress.transfer(swappedBNBForMarketing);
+        charityAddress.transfer(swappedBNBForCharity);
+        devAddress.transfer(swappedBNBForDev);
+        burnAddress.transfer(swappedBNBForBurn);
 
-        // Transfer BNB to the marketing wallet
-        transferBNBToMarketingWallet(swappedBNBForMarketing);
-
-        // Transfer BNB to the charity wallet
-        transferBNBToCharityWallet(swappedBNBForCharity);
-
-        // Transfer BNB to dev wallet
-        transferBNBToDevWallet(swappedBNBForDev);
-        
-        emit SwapAndLiquify(half, swappedBNBForLiquidity, otherHalf); 
+        emit SwapAndLiquify(swappedBNB);
     }
 
     function swapTokensForEth(uint256 tokenAmount) private {
@@ -1242,7 +1176,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
             tokenAmount,
             0, // slippage is unavoidable
             0, // slippage is unavoidable
-            owner(),
+            address(this),
             block.timestamp
         );
     }
@@ -1269,31 +1203,40 @@ contract MarsDoge is Context, IBEP20, Ownable {
     }
 
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(sender, tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFeeForBNB) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
-        _takeLiquidity(tLiquidity);
+        _takeTotalFeeForBNB(tTotalFeeForBNB);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(sender, tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFeeForBNB) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);           
-        _takeLiquidity(tLiquidity);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _takeTotalFeeForBNB(tTotalFeeForBNB);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(sender, tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFeeForBNB) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
-        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);   
-        _takeLiquidity(tLiquidity);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _takeTotalFeeForBNB(tTotalFeeForBNB);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
+    }
+
+    function addToBlacklist(address account) external onlyOwner {
+        _isBlacklisted[account] = true;
+        emit OnBlacklist(account);
+    }
+
+    function removeFromBlacklist(address account) external onlyOwner {
+        _isBlacklisted[account] = false;
     }
 }

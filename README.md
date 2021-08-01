@@ -7,7 +7,7 @@ Symbol : MARSDOGE<br/>
 Total supply: 1000,000,000,000,000
 * 50% Persale 
 * 35% liquidity 
-* 10 % Dxsale Fee
+* 10% Dxsale Fee
 * 5% Burn
 
 
