@@ -727,8 +727,9 @@ contract MarsDoge is Context, IBEP20, Ownable {
     uint256 public _devFee = 200; // 2%
     uint256 public _marketingFee = 200; // 2%
     uint256 public _burnFee = 100; // 1%
+    uint256 public _farmingFee = 0; // 0%
 
-    uint256 public _totalFees = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee;
+    uint256 public _totalFees = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee + _farmingFee;
     uint256 private _previousTotalFee = _totalFees;
 
     address public immutable DOGE = address(0xbA2aE424d960c26247Dd6c32edC70B295c744C43); //DOGE
@@ -738,6 +739,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     address payable public marketingAddress;
     address payable public charityAddress;
     address payable public devAddress;
+    address payable public farmingAddress;
 
     IPancakeRouter02 public immutable pancakeRouter;
     address public immutable pancakePair;
@@ -787,6 +789,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
         marketingAddress = 0x5eb7C4114525b597833022E21F9d6865a1476a59;
         charityAddress = 0x394ee51b4a2415e89c1bb2de46d3eB3dE8dc96dC;
         devAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
+        farmingAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
         
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
@@ -854,20 +857,22 @@ contract MarsDoge is Context, IBEP20, Ownable {
         return _tFeeTotal;
     }
 
-    function setFees(uint256 reflectionFee, uint256 buybackFee, uint256 charityFee, uint256 marketingFee, uint256 devFee, uint256 burnFee) external onlyOwner {
+    function setFees(uint256 reflectionFee, uint256 buybackFee, uint256 charityFee, uint256 marketingFee, uint256 devFee, uint256 burnFee, uint256 farmingFee) external onlyOwner {
         _reflectionFee = reflectionFee;
         _buyBackFee = buybackFee;
         _charityFee = charityFee;
         _marketingFee = marketingFee;
         _devFee = devFee;
         _burnFee = burnFee;
+        _farmingFee = farmingFee;
         _totalFees = reflectionFee + buybackFee + charityFee + marketingFee + devFee;
     }
 
-    function setFeeReceivers(address payable _marketingFeeReceiver, address payable _charityFeeReceiver, address payable _devFeeReceiver) external onlyOwner {
+    function setFeeReceivers(address payable _marketingFeeReceiver, address payable _charityFeeReceiver, address payable _devFeeReceiver, address payable _farmingReceiver) external onlyOwner {
         marketingAddress = _marketingFeeReceiver;
         charityAddress = _charityFeeReceiver;
         devAddress = _devFeeReceiver;
+        farmingReceiver = _farmingReceiver;
     }
 
     function maxTxAmount() public view returns (uint256) {
@@ -1229,17 +1234,18 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
         // calculate burn amount
         uint256 burnAmount = amount.mul(_burnFee).div(10000);
+        uint256 farmingAmount = amount.mul(_farmingFee).div(10000);
         
         if (_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferFromExcluded(sender, recipient, amount);
+            _transferFromExcluded(sender, recipient, amount.sub(burnAmount).sub(farmingAmount));
         } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferToExcluded(sender, recipient, amount);
+            _transferToExcluded(sender, recipient, amount.sub(burnAmount).sub(farmingAmount));
         } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferStandard(sender, recipient, amount);
+            _transferStandard(sender, recipient, amount.sub(burnAmount).sub(farmingAmount));
         } else if (_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferBothExcluded(sender, recipient, amount);
+            _transferBothExcluded(sender, recipient, amount.sub(burnAmount).sub(farmingAmount));
         } else {
-            _transferStandard(sender, recipient, amount);
+            _transferStandard(sender, recipient, amount.sub(burnAmount).sub(farmingAmount));
         }
 
         // Temporarily remove fees to transfer to burn address and marketing wallet
@@ -1247,6 +1253,9 @@ contract MarsDoge is Context, IBEP20, Ownable {
         _totalFees = 0;
 
         _transferStandard(sender, burnAddress, burnAmount);
+        if (farmingAmount > 0) {
+            _transferStandard(sender, farmingAddress, farmingAmount);
+        }
 
         // Restore tax and liquidity fees
         _taxFee = _previousTaxFee;
