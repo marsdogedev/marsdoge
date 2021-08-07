@@ -1,7 +1,3 @@
-/**
- *Submitted for verification at BscScan.com on 2021-07-20
-*/
-
 // SPDX-License-Identifier: GPL-3.0
 
 pragma solidity ^0.6.12;
@@ -723,18 +719,18 @@ contract MarsDoge is Context, IBEP20, Ownable {
     // Percentages for buyback, marketing, reflection, charity and dev
     uint256 public _reflectionFee = 400; // 4%
     uint256 public _buyBackFee = 500; // 5%
-    uint256 public _charityFee = 100; // 1%
+    uint256 public _charityFee = 0; // 0%
     uint256 public _devFee = 200; // 2%
     uint256 public _marketingFee = 200; // 2%
     uint256 public _burnFee = 100; // 1%
-    uint256 public _farmingFee = 0; // 0%
+    uint256 public _farmingFee = 100; // 1%
 
     uint256 public _totalFees = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee + _farmingFee;
     uint256 private _previousTotalFee = _totalFees;
 
-    address public immutable DOGE = address(0xbA2aE424d960c26247Dd6c32edC70B295c744C43); //DOGE
+    address public immutable DOGE = address(0x78867BbEeF44f2326bF8DDd1941a4439382EF2A7); //DOGE, 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
 
-    address public immutable buyBackAddress;
+    address payable public buyBackAddress;
     address public immutable burnAddress;
     address payable public marketingAddress;
     address payable public charityAddress;
@@ -785,11 +781,11 @@ contract MarsDoge is Context, IBEP20, Ownable {
         pancakeRouter = _pancakeRouter;
 
         buyBackAddress = address(this);
-        burnAddress = 0x000000000000000000000000000000000000dEaD;
-        marketingAddress = 0x5eb7C4114525b597833022E21F9d6865a1476a59;
-        charityAddress = 0x394ee51b4a2415e89c1bb2de46d3eB3dE8dc96dC;
+        burnAddress = 0x14719e7e6bEEDFf6f768307A223FEFBe6669b923;
+        marketingAddress = 0x99Cc9963CcBED099900988bc9E2aacc66A7B724f;
+        charityAddress = 0x5eb7C4114525b597833022E21F9d6865a1476a59;
         devAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
-        farmingAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
+        farmingAddress = 0xEcC15277b86964db2454cc44CeB1cC90957402E6;
         
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
@@ -868,11 +864,12 @@ contract MarsDoge is Context, IBEP20, Ownable {
         _totalFees = reflectionFee + buybackFee + charityFee + marketingFee + devFee;
     }
 
-    function setFeeReceivers(address payable _marketingFeeReceiver, address payable _charityFeeReceiver, address payable _devFeeReceiver, address payable _farmingReceiver) external onlyOwner {
+    function setFeeReceivers(address payable _marketingFeeReceiver, address payable _charityFeeReceiver, address payable _devFeeReceiver, address payable _buybackReceiver, address payable _farmingReceiver) external onlyOwner {
         marketingAddress = _marketingFeeReceiver;
         charityAddress = _charityFeeReceiver;
         devAddress = _devFeeReceiver;
-        farmingReceiver = _farmingReceiver;
+        buyBackAddress = _buybackReceiver;
+        farmingAddress = _farmingReceiver;
     }
 
     function maxTxAmount() public view returns (uint256) {
