@@ -1010,14 +1010,14 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
     function setAntiBotEnabled(bool enabled) external onlyOwner() {
         _antiBotEnabled = enabled;
-        _botLimitTimestamp = block.timestamp;
+        _botLimitTimestamp = now;
         emit AntiBotEnabledUpdated(enabled);
     }
 
     function setBotTransLimit(uint256 transTime, uint256 transCount) external onlyOwner() {
         _botTransLimitTime = transTime;
         _botTransLimitCount = transCount;
-        _botLimitTimestamp = block.timestamp;
+        _botLimitTimestamp = now;
     }
 
     //to recieve BNB from pancakeRouter when swaping
