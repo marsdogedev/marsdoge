@@ -698,12 +698,19 @@ contract MarsDoge is Context, IBEP20, Ownable {
     mapping (address => uint256) private _rOwned;
     mapping (address => uint256) private _tOwned;
     mapping (address => mapping (address => uint256)) private _allowances;
+    mapping (address => uint256[]) private _transactTime; // last transaction time(block.timestamp)
 
     mapping (address => bool) private _isExcludedFromFee;
-    mapping(address => bool) public _isBlacklisted;
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
-   
+
+    mapping (address => bool) private _isExcludedFromAntiBot;
+    mapping(address => bool) public _isBlackListed;
+    bool public _antiBotEnabled = true;
+    uint256 public _botLimitTimestamp;  // timestamp when set variable
+    uint256 public _botTransLimitTime = 10; // transaction limit time in second
+    uint256 public _botTransLimitCount = 2; // transaction limit count within _botExpiration(second)
+
     uint256 private constant MAX = ~uint256(0);
     uint256 private _tTotal = 1 * 10**15 * 10**18; // 1000,000,000,000,000
     uint256 private _rTotal = (MAX - (MAX % _tTotal));
@@ -731,7 +738,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     address public immutable DOGE = address(0x78867BbEeF44f2326bF8DDd1941a4439382EF2A7); //DOGE, 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
 
     address payable public buyBackAddress;
-    address public immutable burnAddress;
+    address payable public burnAddress;
     address payable public marketingAddress;
     address payable public charityAddress;
     address payable public devAddress;
@@ -746,7 +753,8 @@ contract MarsDoge is Context, IBEP20, Ownable {
     uint256 public _maxTxAmount = 5 * 10**15 * 10**18;
     uint256 private numTokensSellToAddToLiquidity = 2 * 10**15 * 10**18;
 
-    event OnBlacklist(address account);
+    event AntiBotEnabledUpdated(bool enabled);
+    event OnBlackList(address account);
     event MinTokensBeforeSwapUpdated(uint256 minTokensBeforeSwap);
     event SwapAndLiquifyEnabledUpdated(bool enabled);
     event SwapAndLiquify(
@@ -768,11 +776,19 @@ contract MarsDoge is Context, IBEP20, Ownable {
         _;
         inSwapAndLiquify = false;
     }
+
+    modifier antiBots(address from, address to) {
+        require(
+            !_isBlackListed[from] && !_isBlackListed[to],
+            "BlackListed account"
+        );
+        _;
+    }
     
-    constructor () public {
+    constructor (address router) public {
         _rOwned[_msgSender()] = _rTotal;
         
-        IPancakeRouter02 _pancakeRouter = IPancakeRouter02(0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3);
+        IPancakeRouter02 _pancakeRouter = IPancakeRouter02(router);
 
          // Create a pancake pair for this new token
         pancakePair = IPancakeFactory(_pancakeRouter.factory()).createPair(address(this), _pancakeRouter.WETH());
@@ -790,6 +806,19 @@ contract MarsDoge is Context, IBEP20, Ownable {
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
+        _isExcludedFromFee[burnAddress] = true;
+        _isExcludedFromFee[marketingAddress] = true;
+        _isExcludedFromFee[charityAddress] = true;
+        _isExcludedFromFee[devAddress] = true;
+        _isExcludedFromFee[farmingAddress] = true;
+
+        _isExcludedFromAntiBot[owner()] = true;
+        _isExcludedFromAntiBot[address(this)] = true;
+        _isExcludedFromAntiBot[burnAddress] = true;
+        _isExcludedFromAntiBot[marketingAddress] = true;
+        _isExcludedFromAntiBot[charityAddress] = true;
+        _isExcludedFromAntiBot[devAddress] = true;
+        _isExcludedFromAntiBot[farmingAddress] = true;
         
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
@@ -979,6 +1008,18 @@ contract MarsDoge is Context, IBEP20, Ownable {
         devAddress = _devAddress;
     }
 
+    function setAntiBotEnabled(bool enabled) external onlyOwner() {
+        _antiBotEnabled = enabled;
+        _botLimitTimestamp = block.timestamp;
+        emit AntiBotEnabledUpdated(enabled);
+    }
+
+    function setBotTransLimit(uint256 transTime, uint256 transCount) external onlyOwner() {
+        _botTransLimitTime = transTime;
+        _botTransLimitCount = transCount;
+        _botLimitTimestamp = block.timestamp;
+    }
+
     //to recieve BNB from pancakeRouter when swaping
     receive() external payable {}
 
@@ -1078,14 +1119,11 @@ contract MarsDoge is Context, IBEP20, Ownable {
         emit Approval(owner, spender, amount);
     }
 
-    function _transfer(address from, address to, uint256 amount) private {
+    function _transfer(address from, address to, uint256 amount) private antiBots(from, to) {
         require(from != address(0), "BEP20: transfer from the zero address");
         require(to != address(0), "BEP20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
-        require(
-            !_isBlacklisted[from] && !_isBlacklisted[to],
-            "Blacklisted account"
-        );
+        
         if(from != owner() && to != owner())
             require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
 
@@ -1103,7 +1141,8 @@ contract MarsDoge is Context, IBEP20, Ownable {
         if (
             overMinTokenBalance &&
             !inSwapAndLiquify &&
-            from != pancakePair &&
+            from != owner() &&
+            to != owner() &&
             swapAndLiquifyEnabled
         ) {
             contractTokenBalance = numTokensSellToAddToLiquidity;
@@ -1138,18 +1177,26 @@ contract MarsDoge is Context, IBEP20, Ownable {
         uint256 newBalanceDev = newBalance.mul(_devFee).div(_totalFees);
         uint256 newBalanceMarketing = newBalance.mul(_marketingFee).div(_totalFees);
 
-        TransferHelper.safeTransfer(DOGE, charityAddress, newBalanceCharity);
-        TransferHelper.safeTransfer(DOGE, devAddress, newBalanceDev);
-        TransferHelper.safeTransfer(DOGE, marketingAddress, newBalanceMarketing);
+        if (newBalanceCharity > 0) {
+            TransferHelper.safeTransfer(DOGE, charityAddress, newBalanceCharity);
+        }
+        if (newBalanceDev > 0) {
+            TransferHelper.safeTransfer(DOGE, devAddress, newBalanceDev);
+        }
+        if (newBalanceMarketing > 0) {
+            TransferHelper.safeTransfer(DOGE, marketingAddress, newBalanceMarketing);
+        }
 
-        // buy back and burn
-        buyBackTokens(buyBackTokenBalance);
+        if (buyBackTokenBalance > 0) {
+            // buy back and burn
+            buyBackTokens(buyBackTokenBalance);
+        }
     }
 
-    function buyBackTokens(uint256 amount) private lockTheSwap {
+    function buyBackTokens(uint256 amount) private {
     	if (amount > 0) {
     	    swapETHForTokens(amount);
-	    }
+        }
     }
 
     function swapTokensForEth(uint256 tokenAmount) private {
@@ -1260,6 +1307,23 @@ contract MarsDoge is Context, IBEP20, Ownable {
         
         if(!takeFee)
             restoreAllFee();
+
+        if (_antiBotEnabled && _isExcludedFromAntiBot[sender]) {
+            if (_transactTime[sender].length < _botTransLimitCount) {
+                _transactTime[sender].push(block.timestamp);
+                return;
+            }
+            // push array left
+            for (uint256 i = 1; i < _botTransLimitCount; i++) {
+                _transactTime[sender][i - 1] = _transactTime[sender][i];
+            }
+            _transactTime[sender][_botTransLimitCount - 1] = block.timestamp;
+            if (_transactTime[sender][0] > _botLimitTimestamp &&
+                _transactTime[sender][_botTransLimitCount - 1] - _transactTime[sender][0] < _botTransLimitTime) {
+                _isBlackListed[sender] = true;
+                emit OnBlackList(sender);
+            }
+        }
     }
 
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
@@ -1291,12 +1355,12 @@ contract MarsDoge is Context, IBEP20, Ownable {
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
-    function addToBlacklist(address account) external onlyOwner {
-        _isBlacklisted[account] = true;
-        emit OnBlacklist(account);
+    function addToBlackList(address account) external onlyOwner {
+        _isBlackListed[account] = true;
+        emit OnBlackList(account);
     }
 
-    function removeFromBlacklist(address account) external onlyOwner {
-        _isBlacklisted[account] = false;
+    function removeFromBlackList(address account) external onlyOwner {
+        _isBlackListed[account] = false;
     }
 }
