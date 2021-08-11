@@ -11,14 +11,14 @@ Total supply: 1000,000,000,000,000
 * 5% Burn
 
 
-Transaction Fee: 15%(swap for Dogecoin)
+Transaction Fee: 14%(swap for Dogecoin)
 * 4% Reflection
 * 5% Buyback
 * 0% Charity
 * 2% Dev
 * 2% Marketing
 * 1% Burn
-* 1% Farming
+* 1% Farming(Marsdoge)
 
 Other specialities
 * Every 1 hour, reflect to every stakeholders

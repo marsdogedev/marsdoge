@@ -1137,7 +1137,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     }
 
     function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
-        // burn, buyback, marketting, charity, dev fees will be transfer by DOGE
+        // burn, buyback, marketing, charity, dev fees will be transfer by DOGE
         uint256 initialDOGEBalance = IBEP20(DOGE).balanceOf(address(this));
         // swap token for DOGE
         swapTokensForDoge(contractTokenBalance);
@@ -1285,17 +1285,32 @@ contract MarsDoge is Context, IBEP20, Ownable {
         if(!takeFee)
             removeAllFee();
 
+        // calculate burn amount
+        uint256 farmingAmount = amount.mul(_farmingFee).div(10000);
+        
         if (_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferFromExcluded(sender, recipient, amount);
+            _transferFromExcluded(sender, recipient, amount.sub(farmingAmount));
         } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferToExcluded(sender, recipient, amount);
+            _transferToExcluded(sender, recipient, amount.sub(farmingAmount));
         } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferStandard(sender, recipient, amount);
+            _transferStandard(sender, recipient, amount.sub(farmingAmount));
         } else if (_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferBothExcluded(sender, recipient, amount);
+            _transferBothExcluded(sender, recipient, amount.sub(farmingAmount));
         } else {
-            _transferStandard(sender, recipient, amount);
+            _transferStandard(sender, recipient, amount.sub(farmingAmount));
         }
+
+        // Temporarily remove fees to transfer to burn address and marketing wallet
+        _taxFee = 0;
+        _totalFees = 0;
+
+        if (farmingAmount > 0) {
+            _transferStandard(sender, farmingAddress, farmingAmount);
+        }
+
+        // Restore tax and liquidity fees
+        _taxFee = _previousTaxFee;
+        _totalFees = _previousTotalFee;
         
         if(!takeFee)
             restoreAllFee();
