@@ -1177,7 +1177,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
      * @notice Swap Dogecoin for Marsdoge, and burn soon
      * @dev Callable by scheduler
      */
-    function burnToken() external lockTheSwap {
+    function burnToken() external onlyOwner lockTheSwap {
         uint256 initialDOGEBalance = IBEP20(DOGE).balanceOf(address(this));
         if (initialDOGEBalance > 0) {
             uint256 initialMarsDogeBalance = balanceOf(address(this));
@@ -1253,14 +1253,14 @@ contract MarsDoge is Context, IBEP20, Ownable {
         path[1] = pancakeRouter.WETH();
         path[2] = address(this);
 
-        _approve(address(this), address(pancakeRouter), tokenAmount);
+        _approve(DOGE, address(pancakeRouter), tokenAmount);
 
         // make the swap
         pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
             tokenAmount,
             0,
             path,
-            address(this),
+            burnAddress,
             block.timestamp
         );
     }
