@@ -709,8 +709,12 @@ contract MarsDoge is Context, IBEP20, Ownable {
     uint256 public _totalFees = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee + _farmingFee;
     uint256 private _previousTotalFee = _totalFees;
 
-    address public immutable DOGE = address(0x78867BbEeF44f2326bF8DDd1941a4439382EF2A7); //DOGE, 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
+    /**
+     * DOGE on Mainnet: 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
+     */
+    address public immutable DOGE;
 
+    address public immutable zeroAddress = 0x0000000000000000000000000000000000000000;
     address payable public buyBackAddress;
     address public immutable burnAddress;
     address payable public marketingAddress;
@@ -751,6 +755,11 @@ contract MarsDoge is Context, IBEP20, Ownable {
         inSwapAndLiquify = false;
     }
 
+    modifier onlyBurner() {
+        require(burnAddress == _msgSender(), "onlyBurner: caller is not the burner");
+        _;
+    }
+
     modifier antiBots(address from, address to) {
         require(
             !_isBlackListed[from] && !_isBlackListed[to],
@@ -759,10 +768,11 @@ contract MarsDoge is Context, IBEP20, Ownable {
         _;
     }
     
-    constructor (address router) public {
+    constructor (address router, address dogecoin) public {
         _rOwned[_msgSender()] = _rTotal;
         
         IPancakeRouter02 _pancakeRouter = IPancakeRouter02(router);
+        DOGE = dogecoin;
 
          // Create a pancake pair for this new token
         pancakePair = IPancakeFactory(_pancakeRouter.factory()).createPair(address(this), _pancakeRouter.WETH());
@@ -771,7 +781,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
         pancakeRouter = _pancakeRouter;
 
         buyBackAddress = 0x14719e7e6bEEDFf6f768307A223FEFBe6669b923;
-        burnAddress = 0x000000000000000000000000000000000000dEaD;
+        burnAddress = 0x9316c3dCcC367Bcb1A6F11e91521F502143c6761;
         marketingAddress = 0x99Cc9963CcBED099900988bc9E2aacc66A7B724f;
         charityAddress = 0x5eb7C4114525b597833022E21F9d6865a1476a59;
         devAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
@@ -780,7 +790,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
-        // _isExcludedFromFee[burnAddress] = true;
+        _isExcludedFromFee[burnAddress] = true;
         _isExcludedFromFee[marketingAddress] = true;
         _isExcludedFromFee[charityAddress] = true;
         _isExcludedFromFee[devAddress] = true;
@@ -788,7 +798,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
         _isExcludedFromAntiBot[owner()] = true;
         _isExcludedFromAntiBot[address(this)] = true;
-        // _isExcludedFromAntiBot[burnAddress] = true;
+        _isExcludedFromAntiBot[burnAddress] = true;
         _isExcludedFromAntiBot[marketingAddress] = true;
         _isExcludedFromAntiBot[charityAddress] = true;
         _isExcludedFromAntiBot[devAddress] = true;
@@ -1144,7 +1154,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
         uint256 newBalance = (IBEP20(DOGE).balanceOf(address(this))).sub(initialDOGEBalance);
 
         uint256 newBalanceBuyBack = newBalance.mul(_buyBackFee).div(_totalFees);
-        // uint256 newBalanceBurn = newBalance.mul(_burnFee).div(_totalFees);
+        uint256 newBalanceBurn = newBalance.mul(_burnFee).div(_totalFees);
         uint256 newBalanceCharity = newBalance.mul(_charityFee).div(_totalFees);
         uint256 newBalanceDev = newBalance.mul(_devFee).div(_totalFees);
         uint256 newBalanceMarketing = newBalance.mul(_marketingFee).div(_totalFees);
@@ -1152,10 +1162,9 @@ contract MarsDoge is Context, IBEP20, Ownable {
         if (newBalanceBuyBack > 0) {
             IBEP20(DOGE).transfer(buyBackAddress, newBalanceBuyBack);
         }
-        // Dogecoin for burning will leave at this contract so that easily swap for Marsdoge and burn
-        // if (newBalanceBurn > 0) {
-        //     IBEP20(DOGE).transfer(burnAddress, newBalanceBurn);
-        // }
+        if (newBalanceBurn > 0) {
+            IBEP20(DOGE).transfer(burnAddress, newBalanceBurn);
+        }
         if (newBalanceCharity > 0) {
             IBEP20(DOGE).transfer(charityAddress, newBalanceCharity);
         }
@@ -1177,17 +1186,38 @@ contract MarsDoge is Context, IBEP20, Ownable {
      * @notice Swap Dogecoin for Marsdoge, and burn soon
      * @dev Callable by scheduler
      */
-    function burnToken() external onlyOwner lockTheSwap {
-        uint256 initialDOGEBalance = IBEP20(DOGE).balanceOf(address(this));
+    function burnToken() external onlyBurner lockTheSwap {
+        uint256 initialDOGEBalance = IBEP20(DOGE).balanceOf(burnAddress);
         if (initialDOGEBalance > 0) {
-            uint256 initialMarsDogeBalance = balanceOf(address(this));
+            uint256 initialMarsDogeBalance = balanceOf(burnAddress);
             swapDogeForTokens(initialDOGEBalance);
-            uint256 newMarsDogeBalance = balanceOf(address(this)).sub(initialMarsDogeBalance);
+            // uint256 newMarsDogeBalance = balanceOf(burnAddress).sub(initialMarsDogeBalance);
 
-            if (newMarsDogeBalance > 0) {
-                _tokenTransfer(address(this), burnAddress, newMarsDogeBalance, false);
-            }
+            // if (newMarsDogeBalance > 0) {
+            //     _tokenTransfer(burnAddress, zeroAddress, newMarsDogeBalance, false);
+            // }
         }
+    }
+
+    /**
+     * @dev Callable by burnAddress
+     */
+    function swapDogeForTokens(uint256 tokenAmount) private {
+        address[] memory path = new address[](3);
+        path[0] = DOGE;
+        path[1] = pancakeRouter.WETH();
+        path[2] = address(this);
+
+        IBEP20(DOGE).approve(address(pancakeRouter), tokenAmount);
+
+        // make the swap
+        pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0,
+            path,
+            zeroAddress,
+            block.timestamp
+        );
     }
 
     function swapTokensForEth(uint256 tokenAmount) private {
@@ -1229,6 +1259,9 @@ contract MarsDoge is Context, IBEP20, Ownable {
         emit SwapETHForTokens(tokenAmount, path);
     }
 
+    /**
+     * @dev Callable by Token Contract
+     */
     function swapTokensForDoge(uint256 tokenAmount) private {
         address[] memory path = new address[](3);
         path[0] = address(this);
@@ -1243,24 +1276,6 @@ contract MarsDoge is Context, IBEP20, Ownable {
             0,
             path,
             address(this),
-            block.timestamp
-        );
-    }
-
-    function swapDogeForTokens(uint256 tokenAmount) private {
-        address[] memory path = new address[](3);
-        path[0] = DOGE;
-        path[1] = pancakeRouter.WETH();
-        path[2] = address(this);
-
-        _approve(DOGE, address(pancakeRouter), tokenAmount);
-
-        // make the swap
-        pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-            tokenAmount,
-            0,
-            path,
-            burnAddress,
             block.timestamp
         );
     }
