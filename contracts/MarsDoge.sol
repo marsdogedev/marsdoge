@@ -715,6 +715,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     address public immutable DOGE;
 
     address public immutable zeroAddress = 0x0000000000000000000000000000000000000000;
+    address payable public reflectionAddress;
     address payable public buyBackAddress;
     address public immutable burnAddress;
     address payable public marketingAddress;
@@ -780,6 +781,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
         // set the rest of the contract variables
         pancakeRouter = _pancakeRouter;
 
+        reflectionAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
         buyBackAddress = 0x14719e7e6bEEDFf6f768307A223FEFBe6669b923;
         burnAddress = 0x9316c3dCcC367Bcb1A6F11e91521F502143c6761;
         marketingAddress = 0x99Cc9963CcBED099900988bc9E2aacc66A7B724f;
@@ -1153,12 +1155,16 @@ contract MarsDoge is Context, IBEP20, Ownable {
         swapTokensForDoge(contractTokenBalance);
         uint256 newBalance = (IBEP20(DOGE).balanceOf(address(this))).sub(initialDOGEBalance);
 
+        uint256 newBalanceReflection = newBalance.mul(_reflectionFee).div(_totalFees);
         uint256 newBalanceBuyBack = newBalance.mul(_buyBackFee).div(_totalFees);
         uint256 newBalanceBurn = newBalance.mul(_burnFee).div(_totalFees);
         uint256 newBalanceCharity = newBalance.mul(_charityFee).div(_totalFees);
         uint256 newBalanceDev = newBalance.mul(_devFee).div(_totalFees);
         uint256 newBalanceMarketing = newBalance.mul(_marketingFee).div(_totalFees);
 
+        if (newBalanceReflection > 0) {
+            IBEP20(DOGE).transfer(reflectionAddress, newBalanceReflection);
+        }
         if (newBalanceBuyBack > 0) {
             IBEP20(DOGE).transfer(buyBackAddress, newBalanceBuyBack);
         }
@@ -1303,17 +1309,8 @@ contract MarsDoge is Context, IBEP20, Ownable {
         // calculate burn amount
         uint256 farmingAmount = amount.mul(_farmingFee).div(10000);
         
-        if (_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferFromExcluded(sender, recipient, amount.sub(farmingAmount));
-        } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferToExcluded(sender, recipient, amount.sub(farmingAmount));
-        } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferStandard(sender, recipient, amount.sub(farmingAmount));
-        } else if (_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferBothExcluded(sender, recipient, amount.sub(farmingAmount));
-        } else {
-            _transferStandard(sender, recipient, amount.sub(farmingAmount));
-        }
+        // do not calculate reflection, reflection will be transfered to stakeholders by Dogecoin
+        _transferBothExcluded(sender, recipient, amount.sub(farmingAmount));
 
         // Temporarily remove fees to transfer to burn address and marketing wallet
         _taxFee = 0;
