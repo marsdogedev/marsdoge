@@ -717,7 +717,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
     address public immutable zeroAddress = 0x0000000000000000000000000000000000000000;
     address payable public reflectionAddress;
     address payable public buyBackAddress;
-    address public immutable burnAddress;
+    address payable public burnAddress;
     address payable public marketingAddress;
     address payable public charityAddress;
     address payable public devAddress;
