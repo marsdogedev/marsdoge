@@ -665,6 +665,239 @@ interface IPancakeRouter02 is IPancakeRouter01 {
     ) external;
 }
 
+interface IDividendDistributor {
+    function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external;
+    function setShare(address shareholder, uint256 amount) external;
+    function deposit(uint256 amount) external;
+    function process(uint256 gas) external;
+}
+
+contract DividendDistributor is IDividendDistributor {
+    using SafeMath for uint256;
+
+    address _token;
+
+    struct Share {
+        uint256 amount;
+        uint256 totalExcluded;
+        uint256 totalRealised;
+    }
+
+    /**
+     * DOGE on Mainnet: 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
+     */
+    address public immutable DOGE;
+    IPancakeRouter02 public immutable pancakeRouter;
+
+    address[] shareholders;
+    mapping (address => uint256) shareholderIndexes;
+    mapping (address => uint256) shareholderClaims;
+
+    mapping (address => Share) public shares;
+
+    uint256 public totalShares;
+    uint256 public totalDividends;
+    uint256 public totalDistributed;
+    uint256 public dividendsPerShare;
+    uint256 public dividendsPerShareAccuracyFactor = 10 ** 36;
+
+    uint256 public minPeriod = 1 hours;
+    uint256 public minDistribution = 1 * (10 ** 18);
+
+    uint256 currentIndex;
+
+    bool initialized;
+    modifier initialization() {
+        require(!initialized);
+        _;
+        initialized = true;
+    }
+
+    modifier onlyToken() {
+        require(msg.sender == _token); _;
+    }
+
+    constructor (address _router, address _doge) public {
+        pancakeRouter = _router != address(0)
+            ? IPancakeRouter02(_router)
+            : IPancakeRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+        _token = msg.sender;
+        DOGE = _doge;
+    }
+
+    function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external override onlyToken {
+        minPeriod = _minPeriod;
+        minDistribution = _minDistribution;
+    }
+
+    function setShare(address shareholder, uint256 amount) external override onlyToken {
+        if(shares[shareholder].amount > 0){
+            distributeDividend(shareholder);
+        }
+
+        if(amount > 0 && shares[shareholder].amount == 0){
+            addShareholder(shareholder);
+        }else if(amount == 0 && shares[shareholder].amount > 0){
+            removeShareholder(shareholder);
+        }
+
+        totalShares = totalShares.sub(shares[shareholder].amount).add(amount);
+        shares[shareholder].amount = amount;
+        shares[shareholder].totalExcluded = getCumulativeDividends(shares[shareholder].amount);
+    }
+
+    function deposit(uint256 amount) external override onlyToken {
+        // Reflectable doge is already in balanceOf(address(MARSDOGE))
+        totalDividends = totalDividends.add(amount);
+        dividendsPerShare = dividendsPerShare.add(dividendsPerShareAccuracyFactor.mul(amount).div(totalShares));
+    }
+
+    function process(uint256 gas) external override onlyToken {
+        uint256 shareholderCount = shareholders.length;
+
+        if(shareholderCount == 0) { return; }
+
+        uint256 gasUsed = 0;
+        uint256 gasLeft = gasleft();
+
+        uint256 iterations = 0;
+
+        while(gasUsed < gas && iterations < shareholderCount) {
+            if(currentIndex >= shareholderCount){
+                currentIndex = 0;
+            }
+
+            if(shouldDistribute(shareholders[currentIndex])){
+                distributeDividend(shareholders[currentIndex]);
+            }
+
+            gasUsed = gasUsed.add(gasLeft.sub(gasleft()));
+            gasLeft = gasleft();
+            currentIndex++;
+            iterations++;
+        }
+    }
+    
+    function shouldDistribute(address shareholder) internal view returns (bool) {
+        return shareholderClaims[shareholder] + minPeriod < block.timestamp
+                && getUnpaidEarnings(shareholder) > minDistribution;
+    }
+
+    function distributeDividend(address shareholder) internal {
+        if (shares[shareholder].amount == 0) { return; }
+
+        uint256 amount = getUnpaidEarnings(shareholder);
+        if (amount > 0) {
+            totalDistributed = totalDistributed.add(amount);
+            IBEP20(DOGE).transfer(shareholder, amount);
+            shareholderClaims[shareholder] = block.timestamp;
+            shares[shareholder].totalRealised = shares[shareholder].totalRealised.add(amount);
+            shares[shareholder].totalExcluded = getCumulativeDividends(shares[shareholder].amount);
+        }
+    }
+    
+    function claimDividend() external {
+        distributeDividend(msg.sender);
+    }
+
+    function getUnpaidEarnings(address shareholder) public view returns (uint256) {
+        if(shares[shareholder].amount == 0){ return 0; }
+
+        uint256 shareholderTotalDividends = getCumulativeDividends(shares[shareholder].amount);
+        uint256 shareholderTotalExcluded = shares[shareholder].totalExcluded;
+
+        if(shareholderTotalDividends <= shareholderTotalExcluded){ return 0; }
+
+        return shareholderTotalDividends.sub(shareholderTotalExcluded);
+    }
+
+    function getCumulativeDividends(uint256 share) internal view returns (uint256) {
+        return share.mul(dividendsPerShare).div(dividendsPerShareAccuracyFactor);
+    }
+
+    function addShareholder(address shareholder) internal {
+        shareholderIndexes[shareholder] = shareholders.length;
+        shareholders.push(shareholder);
+    }
+
+    function removeShareholder(address shareholder) internal {
+        shareholders[shareholderIndexes[shareholder]] = shareholders[shareholders.length-1];
+        shareholderIndexes[shareholders[shareholders.length-1]] = shareholderIndexes[shareholder];
+        shareholders.pop();
+    }
+}
+
+interface IBurner {
+    function deposit(uint256 amount) external;
+    function burn() external;
+}
+
+contract Burner is IBurner {
+    using SafeMath for uint256;
+
+    address _token;
+
+    address public immutable zeroAddress = 0x0000000000000000000000000000000000000000;
+    address public immutable DOGE;
+    IPancakeRouter02 public immutable pancakeRouter;
+
+    uint256 public burnAmount;
+
+    uint256 public lastBurn;
+    uint256 public minPeriod = 1 hours;
+
+    modifier onlyToken {
+        require(msg.sender == _token);
+        _;
+    }
+
+    constructor (address _router, address _doge) public {
+        pancakeRouter = _router != address(0)
+            ? IPancakeRouter02(_router)
+            : IPancakeRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+        _token = msg.sender;
+        DOGE = _doge;
+    }
+
+    function setMinPeriod(uint256 _minPeriod) external onlyToken {
+        minPeriod = _minPeriod;
+    }
+
+    function deposit(uint256 amount) external override onlyToken {
+        burnAmount = burnAmount.add(amount);
+    }
+
+    function burn() external override onlyToken {
+        if (shouldBurn()) {
+            uint256 amount = IBEP20(DOGE).balanceOf(address(this));
+            swapDogeForTokens(amount);
+            lastBurn = block.timestamp;
+        }
+    }
+
+    function swapDogeForTokens(uint256 tokenAmount) private {
+        address[] memory path = new address[](3);
+        path[0] = DOGE;
+        path[1] = pancakeRouter.WETH();
+        path[2] = _token;
+
+        IBEP20(DOGE).approve(address(pancakeRouter), tokenAmount);
+
+        // make the swap
+        pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            tokenAmount,
+            0,
+            path,
+            zeroAddress,
+            block.timestamp
+        );
+    }
+
+    function shouldBurn() internal view returns (bool) {
+        return lastBurn + minPeriod < block.timestamp;
+    }
+}
+
 contract MarsDoge is Context, IBEP20, Ownable {
     using SafeMath for uint256;
     using Address for address;
@@ -676,6 +909,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
     mapping (address => bool) private _isExcludedFromFee;
     mapping (address => bool) private _isExcluded;
+    mapping (address => bool) private isDividendExempt;
     address[] private _excluded;
 
     mapping (address => bool) private _isExcludedFromAntiBot;
@@ -712,12 +946,9 @@ contract MarsDoge is Context, IBEP20, Ownable {
     /**
      * DOGE on Mainnet: 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
      */
-    address public immutable DOGE;
+    address public DOGE;
 
-    address public immutable zeroAddress = 0x0000000000000000000000000000000000000000;
-    address payable public reflectionAddress;
     address payable public buyBackAddress;
-    address payable public burnAddress;
     address payable public marketingAddress;
     address payable public charityAddress;
     address payable public devAddress;
@@ -725,6 +956,12 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
     IPancakeRouter02 public immutable pancakeRouter;
     address public immutable pancakePair;
+
+    // every 1 hour, reflect to stakeholders
+    DividendDistributor distributor;
+    uint256 distributorGas = 500000;
+    // every 1 hour, burn
+    Burner burner;
     
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
@@ -756,11 +993,6 @@ contract MarsDoge is Context, IBEP20, Ownable {
         inSwapAndLiquify = false;
     }
 
-    modifier onlyBurner() {
-        require(burnAddress == _msgSender(), "onlyBurner: caller is not the burner");
-        _;
-    }
-
     modifier antiBots(address from, address to) {
         require(
             !_isBlackListed[from] && !_isBlackListed[to],
@@ -781,9 +1013,12 @@ contract MarsDoge is Context, IBEP20, Ownable {
         // set the rest of the contract variables
         pancakeRouter = _pancakeRouter;
 
-        reflectionAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
+        _allowances[address(this)][address(router)] = uint256(-1);
+
+        distributor = new DividendDistributor(address(router), DOGE);
+        burner = new Burner(address(router), DOGE);
+
         buyBackAddress = 0x14719e7e6bEEDFf6f768307A223FEFBe6669b923;
-        burnAddress = 0x9316c3dCcC367Bcb1A6F11e91521F502143c6761;
         marketingAddress = 0x99Cc9963CcBED099900988bc9E2aacc66A7B724f;
         charityAddress = 0x5eb7C4114525b597833022E21F9d6865a1476a59;
         devAddress = 0x79b0b5aDEF94d3768D40e19d9D53406A8933c025;
@@ -792,7 +1027,6 @@ contract MarsDoge is Context, IBEP20, Ownable {
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
-        _isExcludedFromFee[burnAddress] = true;
         _isExcludedFromFee[marketingAddress] = true;
         _isExcludedFromFee[charityAddress] = true;
         _isExcludedFromFee[devAddress] = true;
@@ -800,11 +1034,17 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
         _isExcludedFromAntiBot[owner()] = true;
         _isExcludedFromAntiBot[address(this)] = true;
-        _isExcludedFromAntiBot[burnAddress] = true;
         _isExcludedFromAntiBot[marketingAddress] = true;
         _isExcludedFromAntiBot[charityAddress] = true;
         _isExcludedFromAntiBot[devAddress] = true;
         _isExcludedFromAntiBot[farmingAddress] = true;
+
+        isDividendExempt[owner()] = true;
+        isDividendExempt[address(this)] = true;
+        isDividendExempt[marketingAddress] = true;
+        isDividendExempt[charityAddress] = true;
+        isDividendExempt[devAddress] = true;
+        isDividendExempt[farmingAddress] = true;
         
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
@@ -864,6 +1104,16 @@ contract MarsDoge is Context, IBEP20, Ownable {
         return _isExcluded[account];
     }
 
+    function setIsDividendExempt(address holder, bool exempt) external onlyOwner {
+        require(holder != address(this) && holder != pancakePair);
+        isDividendExempt[holder] = exempt;
+        if (exempt) {
+            distributor.setShare(holder, 0);
+        } else {
+            distributor.setShare(holder, balanceOf(holder));
+        }
+    }
+
     function totalFees() public view returns (uint256) {
         return _tFeeTotal;
     }
@@ -885,6 +1135,15 @@ contract MarsDoge is Context, IBEP20, Ownable {
         devAddress = _devFeeReceiver;
         buyBackAddress = _buybackReceiver;
         farmingAddress = _farmingReceiver;
+    }
+
+    function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external onlyOwner {
+        distributor.setDistributionCriteria(_minPeriod, _minDistribution);
+    }
+
+    function setDistributorSettings(uint256 gas) external onlyOwner {
+        require(gas < 750000);
+        distributorGas = gas;
     }
 
     function maxTxAmount() public view returns (uint256) {
@@ -1146,6 +1405,12 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
         //transfer amount, it will take tax, burn, liquidity fee
         _tokenTransfer(from,to,amount,takeFee);
+
+        if(!isDividendExempt[from]){ try distributor.setShare(from, balanceOf(from)) {} catch {} }
+        if(!isDividendExempt[to]){ try distributor.setShare(to, balanceOf(to)) {} catch {} }
+
+        try distributor.process(distributorGas) {} catch {}
+        try burner.burn() {} catch {}
     }
 
     function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
@@ -1163,13 +1428,15 @@ contract MarsDoge is Context, IBEP20, Ownable {
         uint256 newBalanceMarketing = newBalance.mul(_marketingFee).div(_totalFees);
 
         if (newBalanceReflection > 0) {
-            IBEP20(DOGE).transfer(reflectionAddress, newBalanceReflection);
+            // IBEP20(DOGE).transfer(distributor, newBalanceReflection);
+            distributor.deposit(newBalanceReflection);
         }
         if (newBalanceBuyBack > 0) {
             IBEP20(DOGE).transfer(buyBackAddress, newBalanceBuyBack);
         }
         if (newBalanceBurn > 0) {
-            IBEP20(DOGE).transfer(burnAddress, newBalanceBurn);
+            // IBEP20(DOGE).transfer(burner, newBalanceBurn);
+            burner.deposit(newBalanceBurn);
         }
         if (newBalanceCharity > 0) {
             IBEP20(DOGE).transfer(charityAddress, newBalanceCharity);
@@ -1187,64 +1454,6 @@ contract MarsDoge is Context, IBEP20, Ownable {
     	    swapETHForTokens(amount);
         }
     }
-
-    /**
-     * @notice Swap Dogecoin for Marsdoge, and burn soon
-     * @dev Callable by scheduler
-     */
-    function burnToken() external onlyBurner lockTheSwap {
-        uint256 initialDOGEBalance = IBEP20(DOGE).balanceOf(burnAddress);
-        if (initialDOGEBalance > 0) {
-            uint256 initialMarsDogeBalance = balanceOf(burnAddress);
-            swapDogeForTokens(initialDOGEBalance);
-            // uint256 newMarsDogeBalance = balanceOf(burnAddress).sub(initialMarsDogeBalance);
-
-            // if (newMarsDogeBalance > 0) {
-            //     _tokenTransfer(burnAddress, zeroAddress, newMarsDogeBalance, false);
-            // }
-        }
-    }
-
-    /**
-     * @dev Callable by burnAddress
-     */
-    function swapDogeForTokens(uint256 tokenAmount) private {
-        address[] memory path = new address[](3);
-        path[0] = DOGE;
-        path[1] = pancakeRouter.WETH();
-        path[2] = address(this);
-
-        IBEP20(DOGE).approve(address(pancakeRouter), tokenAmount);
-
-        // make the swap
-        pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-            tokenAmount,
-            0,
-            path,
-            zeroAddress,
-            block.timestamp
-        );
-    }
-
-    function swapTokensForEth(uint256 tokenAmount) private {
-        // generate the pancake pair path of token -> weth
-        address[] memory path = new address[](2);
-        path[0] = address(this);
-        path[1] = pancakeRouter.WETH();
-
-        _approve(address(this), address(pancakeRouter), tokenAmount);
-
-        // make the swap
-        pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
-            tokenAmount,
-            0, // accept any amount of BNB
-            path,
-            address(this),
-            block.timestamp
-        );
-        
-        emit SwapTokensForETH(tokenAmount, path);
-    }
     
     function swapETHForTokens(uint256 tokenAmount) private {
         // generate the uniswap pair path of token -> weth
@@ -1252,7 +1461,8 @@ contract MarsDoge is Context, IBEP20, Ownable {
         path[0] = pancakeRouter.WETH();
         path[1] = address(this);
 
-        _approve(address(this), address(pancakeRouter), tokenAmount);
+        // already in constructor
+        // _approve(address(this), address(pancakeRouter), tokenAmount);
 
         // make the swap
         pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: tokenAmount}(
@@ -1274,7 +1484,8 @@ contract MarsDoge is Context, IBEP20, Ownable {
         path[1] = pancakeRouter.WETH();
         path[2] = DOGE;
 
-        _approve(address(this), address(pancakeRouter), tokenAmount);
+        // already in constructor
+        // _approve(address(this), address(pancakeRouter), tokenAmount);
 
         // make the swap
         pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
@@ -1287,8 +1498,8 @@ contract MarsDoge is Context, IBEP20, Ownable {
     }
 
     function addLiquidity(uint256 tokenAmount, uint256 ethAmount) private {
-        // approve token transfer to cover all possible scenarios
-        _approve(address(this), address(pancakeRouter), tokenAmount);
+        // approve token transfer to cover all possible scenarios, already in constructor
+        // _approve(address(this), address(pancakeRouter), tokenAmount);
 
         // add the liquidity
         pancakeRouter.addLiquidityETH{value: ethAmount}(
