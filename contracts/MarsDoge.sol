@@ -828,6 +828,7 @@ contract DividendDistributor is IDividendDistributor {
 }
 
 interface IBurner {
+    function setMinPeriod(uint256 _minPeriod) external;
     function deposit(uint256 amount) external;
     function burn() external;
 }
@@ -859,7 +860,7 @@ contract Burner is IBurner {
         DOGE = _doge;
     }
 
-    function setMinPeriod(uint256 _minPeriod) external onlyToken {
+    function setMinPeriod(uint256 _minPeriod) external override onlyToken {
         minPeriod = _minPeriod;
     }
 
@@ -1144,6 +1145,10 @@ contract MarsDoge is Context, IBEP20, Ownable {
     function setDistributorSettings(uint256 gas) external onlyOwner {
         require(gas < 750000);
         distributorGas = gas;
+    }
+
+    function setBurnMinPeriod(uint256 _minPeriod) external onlyOwner {
+        burner.setMinPeriod(_minPeriod);
     }
 
     function maxTxAmount() public view returns (uint256) {
