@@ -870,8 +870,7 @@ contract Burner is IBurner {
 
     function burn() external override onlyToken {
         if (shouldBurn()) {
-            uint256 amount = IBEP20(DOGE).balanceOf(address(this));
-            swapDogeForTokens(amount);
+            swapDogeForTokens(burnAmount);
             lastBurn = block.timestamp;
         }
     }
