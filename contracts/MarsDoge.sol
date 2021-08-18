@@ -702,7 +702,7 @@ contract DividendDistributor is IDividendDistributor {
     uint256 public dividendsPerShareAccuracyFactor = 10 ** 36;
 
     uint256 public minPeriod = 10 seconds;
-    uint256 public minDistribution = 0; // 1 * (10 ** 18); // todo
+    uint256 public minDistribution = 1 * (10 ** 18);
 
     uint256 currentIndex;
 
@@ -716,14 +716,6 @@ contract DividendDistributor is IDividendDistributor {
     modifier onlyToken() {
         require(msg.sender == _token); _;
     }
-
-    // todo
-    event SetShare(uint256 mark, address shareHolder, uint256 amount); // mark 500
-    event Deposit(uint256 mark, uint256 amount);  // mark 501
-    event Processing(uint256 mark, uint256 shareCount);  // mark 502
-    event Dividen(uint256 mark, address shareHolder, uint256 amount, uint256 shareholderTotalDividends, uint256 shareholderTotalExcluded);  // mark 503
-    event AddShareholder(uint256 mark, address shareHolder); // mark 504
-    event RemoveShareholder(uint256 mark, address shareHolder); // mark 505
 
     constructor (address _router, address _doge) public {
         pancakeRouter = _router != address(0)
@@ -789,7 +781,7 @@ contract DividendDistributor is IDividendDistributor {
                 currentIndex = 0;
             }
 
-            if(shouldDistribute(shareholders[currentIndex])) { // todo
+            if(shouldDistribute(shareholders[currentIndex])) {
                 distributeDividend(shareholders[currentIndex]);
             }
 
@@ -880,7 +872,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
 
     mapping (address => bool) private _isExcludedFromAntiBot;
     mapping(address => bool) public _isBlackListed;
-    bool public _antiBotEnabled = false; // todo, it must be true
+    bool public _antiBotEnabled = true;
     uint256 public _botLimitTimestamp;  // timestamp when set variable
     uint256 public _botTransLimitTime = 600; // transaction limit time in second
     uint256 public _botTransLimitCount = 4; // transaction limit count within _botExpiration(second)
@@ -906,13 +898,14 @@ contract MarsDoge is Context, IBEP20, Ownable {
     uint256 public _burnFee = 100; // 1%
     uint256 public _farmingFee = 100; // 1%
 
-    uint256 public _totalFee = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee + _farmingFee;
+    uint256 public _totalFee = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee;
     uint256 private _previousTotalFee = _totalFee;
 
     /**
      * DOGE on Mainnet: 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
      */
     address public DOGE;
+    address public immutable DEAD = 0x000000000000000000000000000000000000dEaD;
 
     address payable public buyBackAddress;
     address payable public marketingAddress;
@@ -924,39 +917,19 @@ contract MarsDoge is Context, IBEP20, Ownable {
     address public pancakePair;
 
     // every 1 hour, reflect to stakeholders
-    DividendDistributor public distributor; // todo, remove public in mainnet
+    DividendDistributor distributor;
     uint256 distributorGas = 500000;
 
-    bool public autoBurnEnabled = true; // todo, false
-    uint256 public autoBurnAmount; // todo
-    uint256 public autoBurnMinPeriod = 10 seconds; // todo, 1 hours
-    uint256 public autoBurnLastBurnt; // todo
+    bool public autoBurnEnabled = true;
+    uint256 public autoBurnAmount;
+    uint256 public autoBurnMinPeriod = 1 hours;
+    uint256 public autoBurnLastBurnt;
     
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
 
     uint256 public _maxTxAmount = 5 * 10**6 * 10**18;
-    uint256 private numTokensSellToAddToLiquidity = 1 * 10**18; // 2 * 10**15 * 10**18; // todo
-
-    // todo, burn
-    address public immutable zeroAddress = 0x0000000000000000000000000000000000000000;
-    address public immutable DEAD = 0x000000000000000000000000000000000000dEaD;
-    uint256 public burnAmount;
-    uint256 public lastBurn;
-    uint256 public minPeriod = 1 minutes; // 1 hours; // todo
-    event BurnAmount(uint256 burnMark, uint256 burnAmount, uint256 amount); // mark 200
-    event BurnEnabled(uint256 burnMark, bool shouldBurn, uint256 burnAmount); // mark 201
-    event BeforeShareFrom(uint256 burnMark, address from, uint256 balance, bool available); // mark 300
-    event AfterShareFrom(uint256 burnMark, address from, uint256 balance); // mark 301
-    event BeforeShareTo(uint256 burnMark, address from, uint256 balance, bool available); // mark 302
-    event AfterShareTo(uint256 burnMark, address from, uint256 balance); // mark 303
-    event AfterDistributorProcess(uint256 burnMark, address distributor, uint256 amount); // mark 304
-    event ErrorShareFrom(uint256 burnMark, address from); // mark 305
-    event ErrorShareTo(uint256 burnMark, address from); // mark 306
-    event BeforeBurn(uint256 burnMark, address from, uint256 balance); // mark 307
-    event AfterBurn(uint256 burnMark, address from, uint256 balance); // mark 308
-    event TransferError(uint256 burnMark, uint256 amount1, uint256 amount2, uint256 amount3); // mark 400~
-
+    uint256 private numTokensSellToAddToLiquidity = 2 * 10**15 * 10**18;
 
     event AntiBotEnabledUpdated(bool enabled);
     event OnBlackList(address account);
@@ -972,19 +945,26 @@ contract MarsDoge is Context, IBEP20, Ownable {
         inSwapAndLiquify = false;
     }
 
-    constructor () public {
+    modifier antiBots(address from, address to) {
+        require(
+            !_isBlackListed[from] && !_isBlackListed[to],
+            "BlackListed account"
+        );
+        _;
+    }
+
+    constructor (address router, address dogecoin) public {
         _tOwned[msg.sender] = _tTotal;
         _rOwned[msg.sender] = _rTotal;
 
-        IPancakeRouter02 _pancakeRouter = IPancakeRouter02(0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3);
+        IPancakeRouter02 _pancakeRouter = IPancakeRouter02(router);
+        DOGE = dogecoin;
 
         // Create a pancake pair for this new token
         pancakePair = IPancakeFactory(_pancakeRouter.factory()).createPair(address(this), _pancakeRouter.WETH());
 
         // set the rest of the contract variables
         pancakeRouter = _pancakeRouter;
-
-        DOGE = 0x71eC46AE87cF6aa4518973BD7c45Fc8fc2294d28; // dogecoin; // todo
 
         // _allowances[address(this)][address(router)] = uint256(-1);
 
@@ -1102,6 +1082,7 @@ contract MarsDoge is Context, IBEP20, Ownable {
         _burnFee = burnFee;
         _farmingFee = farmingFee;
         _totalFee = reflectionFee + buybackFee + charityFee + marketingFee + devFee;
+        _previousTotalFee = _totalFee;
     }
 
     function setFeeReceivers(address payable _marketingFeeReceiver, address payable _charityFeeReceiver, address payable _devFeeReceiver, address payable _buybackReceiver, address payable _farmingReceiver) external onlyOwner {
@@ -1546,24 +1527,20 @@ contract MarsDoge is Context, IBEP20, Ownable {
         if(!takeFee)
             removeAllFee();
 
-        if (_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferFromExcluded(sender, recipient, amount);
-        } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferToExcluded(sender, recipient, amount);
-        } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferStandard(sender, recipient, amount);
-        } else if (_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferBothExcluded(sender, recipient, amount);
-        } else {
-            _transferStandard(sender, recipient, amount);
-        }
-
-        /*
         // calculate burn amount
-        uint256 farmingAmount = 0; // amount.mul(_farmingFee).div(10000);
-        
-        // do not calculate reflection, reflection will be transfered to stakeholders by Dogecoin
-        _transferBothExcluded(sender, recipient, amount.sub(farmingAmount));
+        uint256 farmingAmount = amount.mul(_farmingFee).div(10000);
+
+        if (_isExcluded[sender] && !_isExcluded[recipient]) {
+            _transferFromExcluded(sender, recipient, amount.sub(farmingAmount));
+        } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
+            _transferToExcluded(sender, recipient, amount.sub(farmingAmount));
+        } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
+            _transferStandard(sender, recipient, amount.sub(farmingAmount));
+        } else if (_isExcluded[sender] && _isExcluded[recipient]) {
+            _transferBothExcluded(sender, recipient, amount.sub(farmingAmount));
+        } else {
+            _transferStandard(sender, recipient, amount.sub(farmingAmount));
+        }
 
         // Temporarily remove fees to transfer to burn address and marketing wallet
         _taxFee = 0;
@@ -1576,7 +1553,6 @@ contract MarsDoge is Context, IBEP20, Ownable {
         // Restore tax and liquidity fees
         _taxFee = _previousTaxFee;
         _totalFee = _previousTotalFee;
-	*/
 
         if(!takeFee)
             restoreAllFee();
