@@ -842,7 +842,7 @@ contract DividendDistributor is IDividendDistributor {
     }
 }
 
-contract MarsDoge is Context, IBEP20, Ownable {
+contract ArcadeDoge is Context, IBEP20, Ownable {
     using SafeMath for uint256;
     using Address for address;
 
@@ -882,8 +882,8 @@ contract MarsDoge is Context, IBEP20, Ownable {
     uint256 private _rTotal = (MAX - (MAX % _tTotal));
     uint256 private _tFeeTotal;
 
-    string private _name = "MarsDoge";
-    string private _symbol = "$MARSDOGE";
+    string private _name = "ArcadeDoge";
+    string private _symbol = "$ARCADEDOGE";
     uint8 private _decimals = 18;
 
     uint256 public _taxFee = 100; // 1%
