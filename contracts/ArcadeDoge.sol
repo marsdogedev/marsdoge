@@ -883,7 +883,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     uint256 private _tFeeTotal;
 
     string private _name = "ArcadeDoge";
-    string private _symbol = "$ARCADEDOGE";
+    string private _symbol = "ARCDOGE";
     uint8 private _decimals = 18;
 
     uint256 public _taxFee = 100; // 1%
