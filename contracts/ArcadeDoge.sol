@@ -701,8 +701,8 @@ contract DividendDistributor is IDividendDistributor {
     uint256 public dividendsPerShare;
     uint256 public dividendsPerShareAccuracyFactor = 10 ** 36;
 
-    uint256 public minPeriod = 10 seconds; // 1 hours; // todo
-    uint256 public minDistribution = 0; // 1 * (10 ** 18); // todo
+    uint256 public minPeriod = 1 hours;
+    uint256 public minDistribution = 1 * (10 ** 18);
 
     uint256 currentIndex;
 
@@ -922,16 +922,14 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
 
     bool public autoBurnEnabled = true;
     uint256 public autoBurnAmount;
-    uint256 public autoBurnMinPeriod = 10 seconds; // 1 hours; // todo
+    uint256 public autoBurnMinPeriod = 1 hours;
     uint256 public autoBurnLastBurnt;
     
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
 
     uint256 public _maxTxAmount = 5 * 10**6 * 10**18;
-    uint256 private numTokensSellToAddToLiquidity = 1 * 10**18; // 2 * 10**15 * 10**18; // todo
-
-    event AfterDistributorProcess(uint256 burnMark, address distributor, uint256 amount); // mark 304
+    uint256 private numTokensSellToAddToLiquidity = 2 * 10**15 * 10**18;
 
 
     event AntiBotEnabledUpdated(bool enabled);
@@ -941,6 +939,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     event SwapAndLiquify(
         uint256 ethReceived
     );
+    event AfterDistributorProcess(address distributor, uint256 gas);
 
     modifier lockTheSwap {
         inSwapAndLiquify = true;
@@ -1387,7 +1386,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         }
 
         try distributor.process(distributorGas) {} catch {}
-        emit AfterDistributorProcess(304, address(distributor), distributorGas);
+        emit AfterDistributorProcess(address(distributor), distributorGas);
     }
 
     function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
