@@ -1406,7 +1406,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
             autoBurnAmount = autoBurnAmount.add(amountBNBBurn);
         }
 
-        // burn, buyback, marketing, charity, dev fees will be transfer by DOGE
+        // buyback, marketing, charity, dev fees will be transfer by DOGE
         uint256 initialDOGEBalance = IBEP20(DOGE).balanceOf(address(this));
         // swap token for DOGE
         swapTokensForDoge(contractTokenBalance);
