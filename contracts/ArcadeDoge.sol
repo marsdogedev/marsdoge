@@ -701,8 +701,8 @@ contract DividendDistributor is IDividendDistributor {
     uint256 public dividendsPerShare;
     uint256 public dividendsPerShareAccuracyFactor = 10 ** 36;
 
-    uint256 public minPeriod = 10 seconds;
-    uint256 public minDistribution = 1 * (10 ** 18);
+    uint256 public minPeriod = 10 seconds; // 1 hours; // todo
+    uint256 public minDistribution = 0; // 1 * (10 ** 18); // todo
 
     uint256 currentIndex;
 
@@ -886,7 +886,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     string private _symbol = "ARCDOGE";
     uint8 private _decimals = 18;
 
-    uint256 public _taxFee = 100; // 1%
+    uint256 public _taxFee = 0; // 1%
     uint256 private _previousTaxFee = _taxFee;
 
     // Percentages for buyback, marketing, reflection, charity and dev
@@ -898,14 +898,14 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     uint256 public _burnFee = 100; // 1%
     uint256 public _farmingFee = 100; // 1%
 
-    uint256 public _totalFee = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee;
+    uint256 public _totalFee = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee + _burnFee + _farmingFee;
     uint256 private _previousTotalFee = _totalFee;
 
     /**
      * DOGE on Mainnet: 0xbA2aE424d960c26247Dd6c32edC70B295c744C43
      */
     address public DOGE;
-    address public immutable DEAD = 0x000000000000000000000000000000000000dEaD;
+    address public DEAD = 0x000000000000000000000000000000000000dEaD;
 
     address payable public buyBackAddress;
     address payable public marketingAddress;
@@ -922,14 +922,17 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
 
     bool public autoBurnEnabled = true;
     uint256 public autoBurnAmount;
-    uint256 public autoBurnMinPeriod = 1 hours;
+    uint256 public autoBurnMinPeriod = 10 seconds; // 1 hours; // todo
     uint256 public autoBurnLastBurnt;
     
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
 
     uint256 public _maxTxAmount = 5 * 10**6 * 10**18;
-    uint256 private numTokensSellToAddToLiquidity = 2 * 10**15 * 10**18;
+    uint256 private numTokensSellToAddToLiquidity = 1 * 10**18; // 2 * 10**15 * 10**18; // todo
+
+    event AfterDistributorProcess(uint256 burnMark, address distributor, uint256 amount); // mark 304
+
 
     event AntiBotEnabledUpdated(bool enabled);
     event OnBlackList(address account);
@@ -999,7 +1002,9 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         isDividendExempt[charityAddress] = true;
         isDividendExempt[devAddress] = true;
         isDividendExempt[farmingAddress] = true;
+        isDividendExempt[DEAD] = true;
         isDividendExempt[address(pancakePair)] = true;
+        isDividendExempt[DOGE] = true;
         
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
@@ -1081,7 +1086,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         _devFee = devFee;
         _burnFee = burnFee;
         _farmingFee = farmingFee;
-        _totalFee = reflectionFee + buybackFee + charityFee + marketingFee + devFee;
+        _totalFee = reflectionFee + buybackFee + charityFee + marketingFee + devFee + burnFee + farmingFee;
         _previousTotalFee = _totalFee;
     }
 
@@ -1354,7 +1359,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
             swapAndLiquifyEnabled
         ) {
             contractTokenBalance = numTokensSellToAddToLiquidity;
-            //add liquidity
+
             swapAndLiquify(contractTokenBalance);
 
             if (shouldAutoBurn()){
@@ -1376,12 +1381,13 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         if(!isDividendExempt[from]){
             try distributor.setShare(from, balanceOf(from)) {} catch {}
         }
-
+	
         if(!isDividendExempt[to]){
             try distributor.setShare(to, balanceOf(to)) {} catch {}
         }
 
         try distributor.process(distributorGas) {} catch {}
+        emit AfterDistributorProcess(304, address(distributor), distributorGas);
     }
 
     function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
@@ -1406,11 +1412,12 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         // swap token for DOGE
         swapTokensForDoge(contractTokenBalance);
         uint256 newBalance = (IBEP20(DOGE).balanceOf(address(this))).sub(initialDOGEBalance);
+        uint256 buyBackCharityDevMarketingFee = _buyBackFee.add(_charityFee).add(_devFee).add(_marketingFee);
 
-        uint256 newBalanceBuyBack = newBalance.mul(_buyBackFee).div(_totalFee);
-        uint256 newBalanceCharity = newBalance.mul(_charityFee).div(_totalFee);
-        uint256 newBalanceDev = newBalance.mul(_devFee).div(_totalFee);
-        uint256 newBalanceMarketing = newBalance.mul(_marketingFee).div(_totalFee);
+        uint256 newBalanceBuyBack = newBalance.mul(_buyBackFee).div(buyBackCharityDevMarketingFee);
+        uint256 newBalanceCharity = newBalance.mul(_charityFee).div(buyBackCharityDevMarketingFee);
+        uint256 newBalanceDev = newBalance.mul(_devFee).div(buyBackCharityDevMarketingFee);
+        uint256 newBalanceMarketing = newBalance.mul(_marketingFee).div(buyBackCharityDevMarketingFee);
 
         if (newBalanceBuyBack > 0) {
             IBEP20(DOGE).transfer(buyBackAddress, newBalanceBuyBack);
@@ -1528,18 +1535,21 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
             removeAllFee();
 
         // calculate burn amount
-        uint256 farmingAmount = amount.mul(_farmingFee).div(10000);
+        uint256 farmingAmount = 0;
+        if (sender != address(this) && sender != pancakePair) {
+            farmingAmount = amount.mul(_farmingFee).div(10000);
+        }
 
         if (_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferFromExcluded(sender, recipient, amount.sub(farmingAmount));
+            _transferFromExcluded(sender, recipient, amount);
         } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferToExcluded(sender, recipient, amount.sub(farmingAmount));
+            _transferToExcluded(sender, recipient, amount);
         } else if (!_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferStandard(sender, recipient, amount.sub(farmingAmount));
+            _transferStandard(sender, recipient, amount);
         } else if (_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferBothExcluded(sender, recipient, amount.sub(farmingAmount));
+            _transferBothExcluded(sender, recipient, amount);
         } else {
-            _transferStandard(sender, recipient, amount.sub(farmingAmount));
+            _transferStandard(sender, recipient, amount);
         }
 
         // Temporarily remove fees to transfer to burn address and marketing wallet
