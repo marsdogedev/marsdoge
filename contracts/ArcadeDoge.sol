@@ -878,12 +878,12 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     uint256 public _botTransLimitCount = 4; // transaction limit count within _botExpiration(second)
 
     uint256 private constant MAX = ~uint256(0);
-    uint256 private _tTotal = 1 * 10**15 * 10**18; // 1000,000,000,000,000
+    uint256 private _tTotal = 1 * 10**10 * 10**18; // 10,000,000,000
     uint256 private _rTotal = (MAX - (MAX % _tTotal));
     uint256 private _tFeeTotal;
 
     string private _name = "ArcadeDoge";
-    string private _symbol = "ARCDOGE";
+    string private _symbol = "ADOGE";
     uint8 private _decimals = 18;
 
     uint256 public _taxFee = 0; // 1%
