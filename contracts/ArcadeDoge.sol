@@ -898,7 +898,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     uint256 public _burnFee = 100; // 1%
     uint256 public _farmingFee = 100; // 1%
 
-    uint256 public _totalFee = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee + _burnFee + _farmingFee;
+    uint256 public _totalFee = _buyBackFee + _reflectionFee + _charityFee + _devFee + _marketingFee + _burnFee;
     uint256 private _previousTotalFee = _totalFee;
 
     /**
@@ -1085,7 +1085,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         _devFee = devFee;
         _burnFee = burnFee;
         _farmingFee = farmingFee;
-        _totalFee = reflectionFee + buybackFee + charityFee + marketingFee + devFee + burnFee + farmingFee;
+        _totalFee = reflectionFee + buybackFee + charityFee + marketingFee + devFee + burnFee;
         _previousTotalFee = _totalFee;
     }
 
@@ -1123,7 +1123,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     function deliver(uint256 tAmount) public {
         address sender = _msgSender();
         require(!_isExcluded[sender], "Excluded addresses cannot call this function");
-        (uint256 rAmount,,,,,) = _getValues(tAmount);
+        (uint256 rAmount,,,,,,) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rTotal = _rTotal.sub(rAmount);
         _tFeeTotal = _tFeeTotal.add(tAmount);
@@ -1132,10 +1132,10 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
-            (uint256 rAmount,,,,,) = _getValues(tAmount);
+            (uint256 rAmount,,,,,,) = _getValues(tAmount);
             return rAmount;
         } else {
-            (,uint256 rTransferAmount,,,,) = _getValues(tAmount);
+            (,uint256 rTransferAmount,,,,,) = _getValues(tAmount);
             return rTransferAmount;
         }
     }
@@ -1159,6 +1159,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
 
     function includeInReward(address account) external onlyOwner() {
         require(_isExcluded[account], "Account is already excluded");
+        require(_excluded.length < 256);
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_excluded[i] == account) {
                 _excluded[i] = _excluded[_excluded.length - 1];
@@ -1171,13 +1172,15 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     }
 
     function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee, uint256 tFarmingFee) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeTotalFee(tTotalFee);
+        _takeFarmingFee(tFarmingFee);
         _reflectFee(rFee, tFee);
+        emit Transfer(sender, farmingAddress, tFarmingFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
@@ -1248,24 +1251,26 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         _tFeeTotal = _tFeeTotal.add(tFee);
     }
 
-    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
-        (uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee) = _getTValues(tAmount);
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tTotalFee, _getRate());
-        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tTotalFee);
+    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee, uint256 tFarmingFee) = _getTValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tTotalFee, tFarmingFee, _getRate());
+        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tTotalFee, tFarmingFee);
     }
 
-    function _getTValues(uint256 tAmount) private view returns (uint256, uint256, uint256) {
+    function _getTValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256) {
         uint256 tFee = calculateTaxFee(tAmount);
         uint256 tTotalFee = calculateTotalFee(tAmount);
-        uint256 tTransferAmount = tAmount.sub(tFee).sub(tTotalFee);
-        return (tTransferAmount, tFee, tTotalFee);
+        uint256 tFarmingFee = calculateFarmingFee(tAmount);
+        uint256 tTransferAmount = tAmount.sub(tFee).sub(tTotalFee).sub(tFarmingFee);
+        return (tTransferAmount, tFee, tTotalFee, tFarmingFee);
     }
 
-    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tTotalFee, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
+    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tTotalFee, uint256 tFarmingFee, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
         uint256 rAmount = tAmount.mul(currentRate);
         uint256 rFee = tFee.mul(currentRate);
         uint256 rTotalFee = tTotalFee.mul(currentRate);
-        uint256 rTransferAmount = rAmount.sub(rFee).sub(rTotalFee);
+        uint256 rFarmingFee = tFarmingFee.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee).sub(rTotalFee).sub(rFarmingFee);
         return (rAmount, rTransferAmount, rFee);
     }
 
@@ -1275,6 +1280,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     }
 
     function _getCurrentSupply() private view returns(uint256, uint256) {
+        require(_excluded.length < 256);
         uint256 rSupply = _rTotal;
         uint256 tSupply = _tTotal;
         for (uint256 i = 0; i < _excluded.length; i++) {
@@ -1294,12 +1300,24 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
             _tOwned[address(this)] = _tOwned[address(this)].add(tTotalFee);
     }
 
+    function _takeFarmingFee(uint256 tFarmingFee) private {
+        uint256 currentRate =  _getRate();
+        uint256 rFarmingFee = tFarmingFee.mul(currentRate);
+        _rOwned[farmingAddress] = _rOwned[farmingAddress].add(rFarmingFee);
+        if(_isExcluded[farmingAddress])
+            _tOwned[farmingAddress] = _tOwned[farmingAddress].add(tFarmingFee);
+    }
+
     function calculateTaxFee(uint256 _amount) private view returns (uint256) {
         return _amount.mul(_taxFee).div(10**4);
     }
 
     function calculateTotalFee(uint256 _amount) private view returns (uint256) {
         return _amount.mul(_totalFee).div(10**4);
+    }
+
+    function calculateFarmingFee(uint256 _amount) private view returns (uint256) {
+        return _amount.mul(_farmingFee).div(10**4);
     }
 
     function removeAllFee() private {
@@ -1499,45 +1517,10 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         );
     }
 
-    function swapETHForTokens(uint256 ethAmount) private {
-        address[] memory path = new address[](2);
-        path[0] = pancakeRouter.WETH();
-        path[1] = address(this);
-
-        // make swap and burn
-        pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: ethAmount}(
-            0,
-            path,
-            address(this), // zeroAddress,
-            block.timestamp
-        );
-    }
-
-    function addLiquidity(uint256 tokenAmount, uint256 ethAmount) private {
-        // approve token transfer to cover all possible scenarios
-        _approve(address(this), address(pancakeRouter), tokenAmount);
-
-        // add the liquidity
-        pancakeRouter.addLiquidityETH{value: ethAmount}(
-            address(this),
-            tokenAmount,
-            0, // slippage is unavoidable
-            0, // slippage is unavoidable
-            address(this),
-            block.timestamp
-        );
-    }
-
     //this method is responsible for taking all fee, if takeFee is true
     function _tokenTransfer(address sender, address recipient, uint256 amount,bool takeFee) private {
         if(!takeFee)
             removeAllFee();
-
-        // calculate burn amount
-        uint256 farmingAmount = 0;
-        if (sender != address(this) && sender != pancakePair) {
-            farmingAmount = amount.mul(_farmingFee).div(10000);
-        }
 
         if (_isExcluded[sender] && !_isExcluded[recipient]) {
             _transferFromExcluded(sender, recipient, amount);
@@ -1551,14 +1534,6 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
             _transferStandard(sender, recipient, amount);
         }
 
-        // Temporarily remove fees to transfer to burn address and marketing wallet
-        _taxFee = 0;
-        _totalFee = 0;
-
-        if (farmingAmount > 0) {
-            _transferStandard(sender, farmingAddress, farmingAmount);
-        }
-
         // Restore tax and liquidity fees
         _taxFee = _previousTaxFee;
         _totalFee = _previousTotalFee;
@@ -1566,7 +1541,7 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
         if(!takeFee)
             restoreAllFee();
 
-        if (_antiBotEnabled && _isExcludedFromAntiBot[sender]) {
+        if (_antiBotEnabled && !_isExcludedFromAntiBot[sender]) {
             if (_transactTime[sender].length < _botTransLimitCount) {
                 _transactTime[sender].push(block.timestamp);
                 return;
@@ -1585,31 +1560,37 @@ contract ArcadeDoge is Context, IBEP20, Ownable {
     }
 
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee, uint256 tFarmingFee) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeTotalFee(tTotalFee);
+        _takeFarmingFee(tFarmingFee);
         _reflectFee(rFee, tFee);
+        emit Transfer(sender, farmingAddress, tFarmingFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee, uint256 tFarmingFee) = _getValues(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeTotalFee(tTotalFee);
+        _takeFarmingFee(tFarmingFee);
         _reflectFee(rFee, tFee);
+        emit Transfer(sender, farmingAddress, tFarmingFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee) = _getValues(tAmount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTotalFee, uint256 tFarmingFee) = _getValues(tAmount);
         _tOwned[sender] = _tOwned[sender].sub(tAmount);
         _rOwned[sender] = _rOwned[sender].sub(rAmount);
         _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeTotalFee(tTotalFee);
+        _takeFarmingFee(tFarmingFee);
         _reflectFee(rFee, tFee);
+        emit Transfer(sender, farmingAddress, tFarmingFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
